@@ -74,11 +74,20 @@ split at 2019, at 5 bps:
 | Period | CAGR | Sharpe (inv.) | Max DD | Trades |
 |---|---|---|---|---|
 | In-sample (<2019) | 12.9% | 1.74 | -24.9% | 239 |
-| Out-of-sample (>=2019) | 7.2% | 1.43 | -14.5% | 56 |
+| Out-of-sample (>=2019) | 7.0% | 1.16 | -17.4% | 66 |
 
 The edge held up out-of-sample: lower, but positive and still respectable. Two
-caveats keep this from being strong evidence: only 56 trades out of sample, and
+caveats keep this from being strong evidence: only 66 trades out of sample, and
 the period overlaps a strong QQQ bull market.
+
+One measurement trap is worth flagging, because the numbers change if you get it
+wrong. The whole history is backtested **once** and each period is read off as a
+slice of that single run. Backtesting the out-of-sample slice in *isolation*
+would instead warm the 300-day SMA up from scratch inside it; the first ~300
+bars (over a year) would not trade, the first out-of-sample trade would land in
+mid-2020 rather than early 2019, and the drawdown would read an artificially
+shallow -14.5%. The continuous run warms indicators up once, at the start of
+history; the split trade counts then partition exactly (239 + 66 = 305).
 
 ## Parameter sensitivity
 

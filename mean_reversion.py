@@ -328,6 +328,43 @@ def breakeven_cost(table: pd.DataFrame) -> float | None:
 # Out-of-sample split
 # --------------------------------------------------------------------------- #
 
+def _window_metrics(stats, data: pd.DataFrame, label: str, start, end) -> dict:
+    """Metrics over one window [start, end] of a single continuous backtest.
+
+    Return-based figures come from the equity-curve slice; exposure and trade
+    count from the trades whose entry falls inside the window. Because the whole
+    history is run once, indicators are warmed up only at the very start, so no
+    window pays its own warm-up.
+    """
+    eq = stats["_equity_curve"]["Equity"]
+    eq_win = eq[(eq.index >= start) & (eq.index <= end)]
+    row = {"label": label}
+    row.update(performance_stats(eq_win))
+    if "CAGR [%]" not in row:  # window too short to measure
+        return row
+
+    idx = data.index
+    lo = int(idx.searchsorted(start, "left"))
+    hi = int(idx.searchsorted(end, "right")) - 1
+    win_bars = max(hi - lo + 1, 1)
+    last_bar = len(idx) - 1
+
+    n_trades = 0
+    in_position = 0
+    for eb, xb in zip(stats["_trades"]["EntryBar"], stats["_trades"]["ExitBar"]):
+        eb = int(eb)
+        xb = last_bar if pd.isna(xb) else int(xb)
+        if lo <= eb <= hi:
+            n_trades += 1
+        a, b = max(eb, lo), min(xb, hi)  # overlap of the trade with the window
+        if b >= a:
+            in_position += b - a + 1
+
+    row["Exposure [%]"] = 100 * in_position / win_bars
+    row["# Trades"] = n_trades
+    return row
+
+
 def oos_split(
     data: pd.DataFrame,
     variant: str = "base",
@@ -341,20 +378,26 @@ def oos_split(
     handful of values over the whole history, so the headline numbers are
     in-sample by construction. Splitting does not undo that, but it shows how
     the strategy behaved on a period the parameters were not tuned on.
+
+    Subtlety that matters for the SMA-based variants: the whole history is
+    backtested *once* and each period is read off as a slice of that single run.
+    Cutting a fresh out-of-sample slice and backtesting it in isolation would
+    instead spend its first ~300 bars (over a year) warming the SMA up -- the
+    strategy would not trade until mid-2020 and its drawdown would look
+    artificially shallow. One continuous run warms the indicators up once, at
+    the start of history, so no window silently loses its warm-up.
     """
     cutoff = pd.Timestamp(oos_start)
-    segments = {
-        "full": data,
-        f"in-sample (<{oos_start})": data[data.index < cutoff],
-        f"out-of-sample (>={oos_start})": data[data.index >= cutoff],
-    }
+    stats = run_backtest(data, variant=variant, cost_bps=cost_bps, **overrides)
+    start, end = data.index[0], data.index[-1]
+    day = pd.Timedelta(days=1)
 
-    rows = []
-    for label, segment in segments.items():
-        if len(segment) < 400:  # not enough bars to clear the SMA warm-up
-            continue
-        stats = run_backtest(segment, variant=variant, cost_bps=cost_bps, **overrides)
-        rows.append(summarise(stats, label))
+    rows = [
+        _window_metrics(stats, data, "full", start, end),
+        _window_metrics(stats, data, f"in-sample (<{oos_start})", start, cutoff - day),
+        _window_metrics(stats, data, f"out-of-sample (>={oos_start})", cutoff, end),
+    ]
+    rows = [r for r in rows if "CAGR [%]" in r]  # drop windows too short to measure
 
     table = pd.DataFrame(rows).set_index("label")
     # "Sharpe (invested days)" reproduces the article's convention; "Sharpe"
